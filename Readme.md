@@ -12,6 +12,7 @@ Install: `pip install git+https://github.com/imba-tjd/simple-asgi-static-proxy`
 ```py
 from simple_asgi_static_proxy import SimpleASGIStaticProxy as App
 app = App('github.githubassets.com')
+app2 = App({'github.githubassets.com', 'raw.githubusercontent.com'})
 
 if __name__ == '__main__':
     import uvicorn
@@ -20,4 +21,4 @@ if __name__ == '__main__':
 
 ### Client
 
-* Use forward-proxy tools such as `Header Editor`.
+* Use forward-proxy tools such as `Header Editor`
