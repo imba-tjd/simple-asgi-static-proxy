@@ -16,10 +16,10 @@ class SimpleASGIStaticProxy:
 
     def __init__(self, host: str | set[str], ex_resp_headers=None, cacher={}):
         if type(host) is str:
-            check_host(host)
+            self.check_host(host)
         else:
             for h in host:
-                check_host(h)
+                self.check_host(h)
 
         self.host = host
         self.cacher = cacher
@@ -46,7 +46,8 @@ class SimpleASGIStaticProxy:
 
         if not (resp := self.cacher.get(path)):
             resp_raw = self.client.request('GET', url)
-            resp = Urllib3Response(resp_raw.status, list(resp_raw.headers.items()) + self.ex_resp_headers, resp_raw.data)
+            resp = Urllib3Response(resp_raw.status, list(resp_raw.headers.items()) +
+                                   self.ex_resp_headers, resp_raw.data)
             self.cacher.setdefault(path, resp)
 
         await self.response(send, resp)
@@ -72,7 +73,7 @@ class SimpleASGIStaticProxy:
             'body': resp.data
         })
 
-
-def check_host(h: str):
-    if h.startswith('http:') or h.startswith('https:') or '/' in h:
-        raise ValueError(f'{h} is incorrect.')
+    @staticmethod
+    def check_host(h: str):
+        if h.startswith('http:') or h.startswith('https:') or '/' in h:
+            raise ValueError(f'{h} is incorrect.')
