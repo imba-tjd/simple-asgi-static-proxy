@@ -1,9 +1,10 @@
 import urllib3
 import logging
 from typing import NamedTuple
+import gzip
 
 
-class Urllib3Response(NamedTuple):
+class Response(NamedTuple):
     status: int
     headers: list[tuple[str, str]]
     data: bytes
@@ -45,9 +46,9 @@ class SimpleASGIStaticProxy:
             url = 'https://' + path[1:]
 
         if not (resp := self.cacher.get(path)):
-            resp_raw = self.client.request('GET', url)
-            resp = Urllib3Response(resp_raw.status, list(resp_raw.headers.items()) +
-                                   self.ex_resp_headers, resp_raw.data)
+            urllib3_resp = self.client.request('GET', url, preload_content=False)
+            resp = self.make_response(urllib3_resp, self.ex_resp_headers)
+            urllib3_resp.release_conn()
             self.cacher.setdefault(path, resp)
 
         await self.response(send, resp)
@@ -62,7 +63,7 @@ class SimpleASGIStaticProxy:
             'body': b''
         })
 
-    async def response(self, send, resp: Urllib3Response):
+    async def response(self, send, resp: Response):
         await send({
             'type': 'http.response.start',
             'status': resp.status,
@@ -77,3 +78,16 @@ class SimpleASGIStaticProxy:
     def check_host(h: str):
         if h.startswith('http:') or h.startswith('https:') or '/' in h:
             raise ValueError(f'{h} is incorrect.')
+
+    @staticmethod
+    def make_response(urllib3_resp: urllib3.HTTPResponse, ex_resp_headers: list[tuple[str, str]]):
+        headers = list(urllib3_resp.headers.items())
+        data = urllib3_resp.read(decode_content=False)
+
+        if urllib3_resp.headers.get('Content-Encoding') != 'gzip':
+            data = gzip.compress(data)
+            headers += [('Content-Encoding', 'gzip'), ('Content-Length', len(data))]
+
+        headers += ex_resp_headers
+
+        return Response(urllib3_resp.status, headers, data)
