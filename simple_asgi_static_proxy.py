@@ -5,6 +5,7 @@ import gzip
 
 
 class Response(NamedTuple):
+    '''Used for caching'''
     status: int
     headers: list[tuple[str, str]]
     data: bytes
@@ -16,6 +17,7 @@ class SimpleASGIStaticProxy:
     ]
 
     def __init__(self, host: str | set[str], ex_resp_headers=None, cacher={}):
+        '''host shouldn't contain protocol. cacher can be passed in dict-like obj.'''
         if type(host) is str:
             self.check_host(host)
         else:
@@ -45,11 +47,15 @@ class SimpleASGIStaticProxy:
                 return
             url = 'https://' + path[1:]
 
-        if not (resp := self.cacher.get(path)):
+        if not (resp := self.cacher.get(url)):
+            if not self.check_size(url):
+                await self.forbidden(send)
+                return
+
             urllib3_resp = self.client.request('GET', url, preload_content=False)
             resp = self.make_response(urllib3_resp, self.ex_resp_headers)
             urllib3_resp.release_conn()
-            self.cacher.setdefault(path, resp)
+            self.cacher.setdefault(url, resp)
 
         await self.response(send, resp)
 
@@ -81,6 +87,7 @@ class SimpleASGIStaticProxy:
 
     @staticmethod
     def make_response(urllib3_resp: urllib3.HTTPResponse, ex_resp_headers: list[tuple[str, str]]):
+        '''if upstream response is gzipped, response it. Otherwise gzip it by myself.'''
         headers = list(urllib3_resp.headers.items())
         data = urllib3_resp.read(decode_content=False)
 
@@ -91,3 +98,7 @@ class SimpleASGIStaticProxy:
         headers += ex_resp_headers
 
         return Response(urllib3_resp.status, headers, data)
+
+    def check_size(self, url: str):
+        resp = self.client.request('HEAD', url)
+        return int(resp.headers.get('Content-Length')) < 10 * 2**20

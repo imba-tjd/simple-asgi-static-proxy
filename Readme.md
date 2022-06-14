@@ -23,7 +23,4 @@ if __name__ == '__main__':
 
 * Use forward-proxy tools such as `Header Editor`
 * Must and only support gzip
-
-## TODO
-
-* 先HEAD请求，获得Content-Length，控制最大文件大小
+* Can only use GET
