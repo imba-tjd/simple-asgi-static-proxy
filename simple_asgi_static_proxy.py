@@ -16,7 +16,7 @@ class SimpleASGIStaticProxy:
         ('Cache-Control', 'public, max-age=31536000, immutable')
     ]
 
-    def __init__(self, host: str | set[str], ex_resp_headers=None, cacher={}):
+    def __init__(self, host: str | set[str], *, ex_resp_headers=None, cacher={}, enable_gzip=True):
         '''host shouldn't contain protocol. cacher can be passed in dict-like obj.'''
         if type(host) is str:
             self.check_host(host)
@@ -26,6 +26,7 @@ class SimpleASGIStaticProxy:
 
         self.host = host
         self.cacher = cacher
+        self.enable_gzip = enable_gzip
         self.client = urllib3.PoolManager(timeout=3, headers={'Accept-Encoding': 'gzip'})
         self.logger = logging.getLogger(__name__)
         if ex_resp_headers:
@@ -53,7 +54,7 @@ class SimpleASGIStaticProxy:
                 return
 
             urllib3_resp = self.client.request('GET', url, preload_content=False)
-            resp = self.make_response(urllib3_resp, self.ex_resp_headers)
+            resp = self.make_response(urllib3_resp)
             urllib3_resp.release_conn()
             self.cacher.setdefault(url, resp)
 
@@ -80,25 +81,24 @@ class SimpleASGIStaticProxy:
             'body': resp.data
         })
 
-    @staticmethod
-    def check_host(h: str):
-        if h.startswith('http:') or h.startswith('https:') or '/' in h:
-            raise ValueError(f'{h} is incorrect.')
-
-    @staticmethod
-    def make_response(urllib3_resp: urllib3.HTTPResponse, ex_resp_headers: list[tuple[str, str]]):
+    def make_response(self, urllib3_resp: urllib3.HTTPResponse):
         '''if upstream response is gzipped, response it. Otherwise gzip it by myself.'''
         data = urllib3_resp.read(decode_content=False)
 
-        if not urllib3_resp.headers.get('Content-Encoding') and (ct := urllib3_resp.headers.get('Content-Type')) and (
-            ct.startswith('text') or ct.startswith('application/json') or ct.startswith('image/svg+xml')):
+        if self.enable_gzip and not urllib3_resp.headers.get('Content-Encoding') and (ct := urllib3_resp.headers.get('Content-Type')) and (
+                ct.startswith('text') or ct.startswith('application/json') or ct.startswith('image/svg+xml')):
             data = gzip.compress(data)
             urllib3_resp.headers['Content-Encoding'] = 'gzip'
             urllib3_resp.headers['Content-Length'] = str(len(data))
 
-        headers = list(urllib3_resp.headers.items()) + ex_resp_headers
+        headers = list(urllib3_resp.headers.items()) + self.ex_resp_headers
 
         return Response(urllib3_resp.status, headers, data)
+
+    @staticmethod
+    def check_host(h: str):
+        if h.startswith('http:') or h.startswith('https:') or '/' in h:
+            raise ValueError(f'{h} is incorrect.')
 
     def check_size(self, url: str):
         resp = self.client.request('HEAD', url)
