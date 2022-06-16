@@ -12,9 +12,10 @@ class Response(NamedTuple):
 
 
 class SimpleASGIStaticProxy:
-    ex_resp_headers = [
-        ('Cache-Control', 'public, max-age=31536000, immutable')
-    ]
+    ex_resp_headers = {
+        'Cache-Control': 'public, max-age=31536000, immutable',
+        'Accept-Ranges': 'none'
+    }
 
     def __init__(self, host: str | set[str], *, ex_resp_headers=None, cacher={}, enable_gzip=True):
         '''host shouldn't contain protocol. cacher can be passed in dict-like obj.'''
@@ -91,7 +92,7 @@ class SimpleASGIStaticProxy:
             urllib3_resp.headers['Content-Encoding'] = 'gzip'
             urllib3_resp.headers['Content-Length'] = str(len(data))
 
-        headers = list(urllib3_resp.headers.items()) + self.ex_resp_headers
+        headers = list((dict(urllib3_resp.headers) | self.ex_resp_headers).items()) # urllib3 HTTPHeaderDict not support |
 
         return Response(urllib3_resp.status, headers, data)
 
