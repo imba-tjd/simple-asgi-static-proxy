@@ -88,14 +88,15 @@ class SimpleASGIStaticProxy:
     @staticmethod
     def make_response(urllib3_resp: urllib3.HTTPResponse, ex_resp_headers: list[tuple[str, str]]):
         '''if upstream response is gzipped, response it. Otherwise gzip it by myself.'''
-        headers = list(urllib3_resp.headers.items())
         data = urllib3_resp.read(decode_content=False)
 
-        if urllib3_resp.headers.get('Content-Encoding') != 'gzip':
+        if not urllib3_resp.headers.get('Content-Encoding') and (ct := urllib3_resp.headers.get('Content-Type')) and (
+            ct.startswith('text') or ct.startswith('application/json') or ct.startswith('image/svg+xml')):
             data = gzip.compress(data)
-            headers += [('Content-Encoding', 'gzip'), ('Content-Length', len(data))]
+            urllib3_resp.headers['Content-Encoding'] = 'gzip'
+            urllib3_resp.headers['Content-Length'] = str(len(data))
 
-        headers += ex_resp_headers
+        headers = list(urllib3_resp.headers.items()) + ex_resp_headers
 
         return Response(urllib3_resp.status, headers, data)
 
