@@ -82,7 +82,7 @@ class SimpleASGIStaticProxy:
             'body': resp.data
         })
 
-    def make_response(self, urllib3_resp: urllib3.HTTPResponse):
+    def make_response(self, urllib3_resp: urllib3.response.BaseHTTPResponse):
         '''if upstream response is gzipped, response it. Otherwise gzip it by myself.'''
         data = urllib3_resp.read(decode_content=False)
 
@@ -103,4 +103,4 @@ class SimpleASGIStaticProxy:
 
     def check_size(self, url: str):
         resp = self.client.request('HEAD', url)
-        return int(resp.headers.get('Content-Length')) < 10 * 2**20
+        return int(resp.headers['Content-Length']) < 10 * 2**20 # 这样无法检查流式响应，先这样看看吧
