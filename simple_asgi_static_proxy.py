@@ -89,7 +89,7 @@ class SimpleASGIStaticProxy:
             'body': resp.data
         })
 
-    def make_response(self, urllib3_resp: urllib3.response.BaseHTTPResponse):
+    def make_response(self, urllib3_resp): # TODO: set urllib3.response.BaseHTTPResponse after 2.0 release
         '''if upstream response is gzipped, response it. Otherwise gzip it by myself.'''
         data = urllib3_resp.read(decode_content=False)
 
