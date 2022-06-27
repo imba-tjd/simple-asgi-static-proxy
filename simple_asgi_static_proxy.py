@@ -43,7 +43,7 @@ class SimpleASGIStaticProxy:
         self.logger.info(path)
 
         if type(self.host) is str:
-            url = 'https://' + self.host + path
+            url = f'https://{self.host}{path}'
         else:
             path.removeprefix('https://').removeprefix('http://')
             slash_ndx = path.find('/', 1)
@@ -54,7 +54,7 @@ class SimpleASGIStaticProxy:
             if not self.check_domain(domain):
                 await self.forbidden(send)
                 return
-            url = 'https://' + path[1:]
+            url = f'https://{path[1:]}'
 
         if not (resp := self.cacher.get(url)):
             if not self.check_size(url):
