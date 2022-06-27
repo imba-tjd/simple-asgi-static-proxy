@@ -1,6 +1,6 @@
 import urllib3
 import logging
-from typing import NamedTuple
+from typing import NamedTuple, Any
 import gzip
 
 
@@ -12,13 +12,13 @@ class Response(NamedTuple):
 
 
 class SimpleASGIStaticProxy:
-    ex_resp_headers = {
+    ex_resp_headers = {  # 默认的额外响应头
         'Cache-Control': 'public, max-age=31536000, immutable',
         'Accept-Ranges': 'none'
     }
 
-    def __init__(self, host: str | set[str], *, ex_resp_headers=None, cacher={}, enable_gzip=True):
-        '''host shouldn't contain protocol. cacher can be passed in dict-like obj.'''
+    def __init__(self, host: str | set[str], *, ex_resp_headers=None, cacher: dict[str, Any] = {}, enable_gzip=True, max_size=2**21, subdomain=True):
+        '''host shouldn't contain protocol. cacher should be dict-like obj. max_size defaults to 10MB. subdomain only works in mode2.'''
         if type(host) is str:
             self.check_host(host)
         else:
@@ -28,6 +28,8 @@ class SimpleASGIStaticProxy:
         self.host = host
         self.cacher = cacher
         self.enable_gzip = enable_gzip
+        self.max_size = max_size
+        self.subdomain = subdomain
         self.client = urllib3.PoolManager(timeout=3, headers={'Accept-Encoding': 'gzip'})
         self.logger = logging.getLogger(__name__)
         if ex_resp_headers:
@@ -43,8 +45,13 @@ class SimpleASGIStaticProxy:
         if type(self.host) is str:
             url = 'https://' + self.host + path
         else:
-            domain = path[1:path.index('/', 1)]
-            if self.host and domain not in self.host:
+            path.removeprefix('https://').removeprefix('http://')
+            slash_ndx = path.find('/', 1)
+            if slash_ndx == -1:
+                await self.forbidden(send)  # 禁止访问根
+                return
+            domain = path[1:slash_ndx]
+            if not self.check_domain(domain):
                 await self.forbidden(send)
                 return
             url = 'https://' + path[1:]
@@ -92,7 +99,8 @@ class SimpleASGIStaticProxy:
             urllib3_resp.headers['Content-Encoding'] = 'gzip'
             urllib3_resp.headers['Content-Length'] = str(len(data))
 
-        headers = list((dict(urllib3_resp.headers) | self.ex_resp_headers).items()) # urllib3 HTTPHeaderDict not support |
+        # urllib3 HTTPHeaderDict not support |
+        headers = list((dict(urllib3_resp.headers) | self.ex_resp_headers).items())
 
         return Response(urllib3_resp.status, headers, data)
 
@@ -103,4 +111,15 @@ class SimpleASGIStaticProxy:
 
     def check_size(self, url: str):
         resp = self.client.request('HEAD', url)
-        return int(resp.headers['Content-Length']) < 10 * 2**20 # 这样无法检查流式响应，先这样看看吧
+        return int(resp.headers['Content-Length']) < self.max_size  # 这样无法检查流式响应，先这样看看吧
+
+    def check_domain(self, domain: str):
+        if not self.host or domain in self.host:
+            return True  # host为空时直接放行
+
+        if self.subdomain:  # domain不在host里且启用subdomain，检查host里的不是domain的后缀
+            for h in self.host:
+                if domain.endswith(h):
+                    return True
+
+        return False
