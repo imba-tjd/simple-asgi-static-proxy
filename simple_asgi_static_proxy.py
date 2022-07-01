@@ -17,7 +17,7 @@ class SimpleASGIStaticProxy:
         'Accept-Ranges': 'none'
     }
 
-    def __init__(self, host: str | set[str], *, ex_resp_headers=None, cacher: dict[str, Any] = {}, enable_gzip=True, max_size=2**23, subdomain=True):
+    def __init__(self, host: str | set[str], *, ex_resp_headers=None, cacher: dict[str, Any] = {}, maxsize=2**23, gzip=True, subdomain=True):
         '''host shouldn't contain protocol. cacher should be dict-like obj. max_size defaults to 8MB. subdomain only works in mode2.'''
         if type(host) is str:
             self.check_host(host)
@@ -27,9 +27,9 @@ class SimpleASGIStaticProxy:
 
         self.host = host
         self.cacher = cacher
-        self.enable_gzip = enable_gzip
-        self.max_size = max_size
-        self.subdomain = subdomain
+        self.enable_gzip = gzip
+        self.max_size = maxsize
+        self.allow_subdomain = subdomain
         self.client = urllib3.PoolManager(timeout=3, headers={'Accept-Encoding': 'gzip'})
         self.logger = logging.getLogger(__name__)
         if ex_resp_headers:
@@ -110,14 +110,19 @@ class SimpleASGIStaticProxy:
             raise ValueError(f'{h} is incorrect.')
 
     def check_size(self, url: str):
+        if not self.max_size:
+            return True
         resp = self.client.request('HEAD', url)
-        return int(resp.headers['Content-Length']) < self.max_size  # 这样无法检查流式响应，先这样看看吧
+        cl = resp.headers.get('Content-Length')
+        if cl is None:
+            return False
+        return int(cl) < self.max_size
 
     def check_domain(self, domain: str):
         if not self.host or domain in self.host:
             return True  # host为空时直接放行
 
-        if self.subdomain:  # domain不在host里且启用subdomain，检查host里的不是domain的后缀
+        if self.allow_subdomain:  # domain不在host里且启用subdomain，检查host里的不是domain的后缀
             for h in self.host:
                 if domain.endswith(h):
                     return True
