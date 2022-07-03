@@ -61,7 +61,7 @@ class SimpleASGIStaticProxy:
                 await self.forbidden(send)
                 return
 
-            urllib3_resp = self.client.request('GET', url, preload_content=False)
+            urllib3_resp = self.client.request('GET', url, preload_content=False) # TODO: catch exception 超时和域名不对
             resp = self.make_response(urllib3_resp)
             urllib3_resp.release_conn()
             self.cacher.setdefault(url, resp)

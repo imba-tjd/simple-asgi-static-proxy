@@ -27,3 +27,10 @@ if __name__ == '__main__':
 * In Browser, use forward-proxy tools such as `Header Editor`
 * Must and only support gzip
 * Can only use GET
+* Query string and request headers are ignored
+* Upstream must support https and response with Content-Length
+
+## TODO
+
+* HEAD
+* 日志
