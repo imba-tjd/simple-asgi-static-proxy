@@ -45,7 +45,7 @@ class SimpleASGIStaticProxy:
         if type(self.host) is str:
             url = 'https://' + self.host + path
         else:
-            path.removeprefix('https://').removeprefix('http://')
+            path = path.removeprefix('https://').removeprefix('http://')
             slash_ndx = path.find('/', 1)
             if slash_ndx == -1:
                 await self.forbidden(send)  # 禁止访问根
