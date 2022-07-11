@@ -17,7 +17,7 @@ class SimpleASGIStaticProxy:
         'Accept-Ranges': 'none'
     }
 
-    def __init__(self, host: str | set[str], *, ex_resp_headers=None, cacher: dict[str, Any] = {}, maxsize=2**23, gzip=True, subdomain=True):
+    def __init__(self, host: str | set[str], *, ex_resp_headers=None, cacher: dict[str, Any] = {}, maxsize=2**23, gzip=True, subdomain=True, noua=False):
         '''host shouldn't contain protocol. cacher should be dict-like obj. max_size defaults to 8MB. subdomain only works in mode2.'''
         if type(host) is str:
             self.check_host(host)
@@ -34,6 +34,8 @@ class SimpleASGIStaticProxy:
         self.logger = logging.getLogger(__name__)
         if ex_resp_headers:
             self.ex_resp_headers = ex_resp_headers
+        if noua:
+            self.ex_resp_headers['User-Agent'] = ''
 
     async def __call__(self, scope, receive, send):
         assert scope['type'] == 'http'
