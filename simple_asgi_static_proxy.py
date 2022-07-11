@@ -30,7 +30,7 @@ class SimpleASGIStaticProxy:
         self.enable_gzip = gzip
         self.max_size = maxsize
         self.allow_subdomain = subdomain
-        self.client = urllib3.PoolManager(timeout=3, headers={'Accept-Encoding': 'gzip'})
+        self.client = urllib3.PoolManager(headers={'Accept-Encoding': 'gzip'}, timeout=3, retries=1)
         self.logger = logging.getLogger(__name__)
         if ex_resp_headers:
             self.ex_resp_headers = ex_resp_headers
@@ -46,34 +46,43 @@ class SimpleASGIStaticProxy:
 
         if type(self.host) is str:
             url = 'https://' + self.host + path
-        else:
+        else:  # Mode2
             path = path.removeprefix('https://').removeprefix('http://')
             slash_ndx = path.find('/', 1)
             if slash_ndx == -1:
-                await self.forbidden(send)  # 禁止访问根
+                await self.refuse(send)  # 禁止访问根
                 return
             domain = path[1:slash_ndx]
             if not self.check_domain(domain):
-                await self.forbidden(send)
+                await self.refuse(send)
                 return
             url = 'https://' + path[1:]
 
         if not (resp := self.cacher.get(url)):
             if not self.check_size(url):
-                await self.forbidden(send)
+                await self.refuse(send)
                 return
 
-            urllib3_resp = self.client.request('GET', url, preload_content=False) # TODO: catch exception 超时和域名不对
-            resp = self.make_response(urllib3_resp)
+            try:
+                urllib3_resp = self.client.request('GET', url, preload_content=False)  # TODO: catch exception 超时和域名不对
+            except urllib3.exceptions.MaxRetryError as e:
+                self.logger.exception(e)
+                await self.refuse(send, 502)  # Bad Gateway
+                return
+            except urllib3.exceptions.TimeoutError as e:
+                self.logger.exception(e)
+                await self.refuse(send, 504)  # Gateway Timeout
+                return
+            resp = self.cook_response(urllib3_resp)
             urllib3_resp.release_conn()
             self.cacher.setdefault(url, resp)
 
         await self.response(send, resp)
 
-    async def forbidden(self, send):
+    async def refuse(self, send, status=403):
         await send({
             'type': 'http.response.start',
-            'status': 403,
+            'status': status,
         })
         await send({
             'type': 'http.response.body',
@@ -91,7 +100,7 @@ class SimpleASGIStaticProxy:
             'body': resp.data
         })
 
-    def make_response(self, urllib3_resp): # TODO: set urllib3.response.BaseHTTPResponse after 2.0 release
+    def cook_response(self, urllib3_resp):  # TODO: set urllib3.response.BaseHTTPResponse after 2.0 release
         '''if upstream response is gzipped, response it. Otherwise gzip it by myself.'''
         data = urllib3_resp.read(decode_content=False)
 
