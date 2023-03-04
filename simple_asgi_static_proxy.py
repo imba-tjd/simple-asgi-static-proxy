@@ -48,14 +48,15 @@ class SimpleASGIStaticProxy:
             url = 'https://' + self.host + path
         else:  # Mode2
             path = path.removeprefix('https://').removeprefix('http://')
-            slash_ndx = path.find('/', 1)
-            if slash_ndx == -1:
+            if path[-1] == '/' or path.endswith('/favicon.ico'):
                 await self.refuse(send)  # 禁止访问根
                 return
-            domain = path[1:slash_ndx]
+
+            domain = path[1:path.find('/', 1)]  # 即使返回-1也没问题
             if not self.check_domain(domain):
                 await self.refuse(send)
                 return
+
             url = 'https://' + path[1:]
 
         if not (resp := self.cacher.get(url)):
@@ -100,7 +101,7 @@ class SimpleASGIStaticProxy:
             'body': resp.data
         })
 
-    def cook_response(self, urllib3_resp):  # TODO: set urllib3.response.BaseHTTPResponse after 2.0 release
+    def cook_response(self, urllib3_resp: urllib3.response.BaseHTTPResponse):
         '''if upstream response is gzipped, response it. Otherwise gzip it by myself.'''
         data = urllib3_resp.read(decode_content=False)
 
@@ -110,7 +111,7 @@ class SimpleASGIStaticProxy:
             urllib3_resp.headers['Content-Encoding'] = 'gzip'
             urllib3_resp.headers['Content-Length'] = str(len(data))
 
-        # urllib3 HTTPHeaderDict not support |
+        # urllib3 HTTPHeaderDict doesn't support |
         headers = list((dict(urllib3_resp.headers) | self.ex_resp_headers).items())
 
         return Response(urllib3_resp.status, headers, data)
