@@ -1,6 +1,8 @@
 import urllib3
 import logging
-from typing import NamedTuple, Any, MutableMapping, Literal
+from typing import NamedTuple, Any, MutableMapping, Literal, Callable, Coroutine
+
+SEND = Callable[[dict[str, Any]], Coroutine]  # ASGI send callable
 
 
 class Response(NamedTuple):
@@ -34,7 +36,7 @@ class SimpleASGIStaticProxy:
         if ua != 'DEFAULT':
             self.ex_resp_headers['User-Agent'] = ua
 
-    async def __call__(self, scope, receive, send):
+    async def __call__(self, scope, receive, send: SEND):
         assert scope['type'] == 'http'
         assert scope['method'] in ('GET', 'HEAD')
         path: str = scope['path']
@@ -44,26 +46,51 @@ class SimpleASGIStaticProxy:
             await self.refuse(send)
             return
 
+        if scope['method'] == 'GET':
+            await self.serve_get(url, send)
+        else:
+            await self.serve_head(url, send)
+
+    async def serve_head(self, url: str, send: SEND):
+        upstream_resp = await self.do_request('HEAD', url)
+        if isinstance(upstream_resp, int):
+            await self.refuse(send, upstream_resp)
+            return
+
+        resp = Response(upstream_resp.status, list(upstream_resp.headers.items()), b'')
+
+        await self.response(send, resp)
+
+    async def serve_get(self, url: str, send: SEND):
         if resp := self.cacher.get(url):  # 已缓存
             await self.response(send, resp)
             return
 
-        if not self.check_size(url):  # 过大
-            await self.refuse(send)
+        if self.maxsize:  # 需检查大小
+            head_resp = await self.do_request('HEAD', url)
+            if isinstance(head_resp, int):
+                await self.refuse(send, head_resp)
+                return
+
+            cl = head_resp.headers.get('Content-Length')
+            if cl is None or int(cl) > self.maxsize:
+                await self.refuse(send)
+                return
+
+        upstream_resp = await self.do_request('GET', url)  # 作为客户端发请求
+        if isinstance(upstream_resp, int):
+            await self.refuse(send, upstream_resp)
             return
 
-        urllib3_resp = await self.do_request(scope['method'], url, send)
-        if urllib3_resp is None:
-            return
-
-        resp = self.cook_response(urllib3_resp)
-        urllib3_resp.release_conn()
+        headers_dic = dict(upstream_resp.headers) | self.ex_resp_headers
+        resp = Response(upstream_resp.status, list(headers_dic.items()), upstream_resp.data)
 
         self.cacher.setdefault(url, resp)
 
         await self.response(send, resp)
 
-    async def refuse(self, send, status=403):
+    @staticmethod
+    async def refuse(send: SEND, status=403):
         await send({
             'type': 'http.response.start',
             'status': status,
@@ -73,7 +100,8 @@ class SimpleASGIStaticProxy:
             'body': b''
         })
 
-    async def response(self, send, resp: Response):
+    @staticmethod
+    async def response(send: SEND, resp: Response):
         await send({
             'type': 'http.response.start',
             'status': resp.status,
@@ -85,6 +113,7 @@ class SimpleASGIStaticProxy:
         })
 
     def cook_url(self, path: str):
+        '''根据客户端请求的路径生成向上游请求的URL'''
         if type(self.host) is str:
             return 'https://' + self.host + path
         else:  # Mode2
@@ -98,53 +127,28 @@ class SimpleASGIStaticProxy:
 
             return 'https://' + path[1:]
 
-    async def do_request(self, method: Literal['GET'] | Literal['HEAD'], url: str, send):
-        '''作为客户端请求，处理了异常'''
+    async def do_request(self, method: Literal['GET'] | Literal['HEAD'], url: str):
+        '''作为客户端请求，处理了已知异常'''
         try:
-            return self.do_get(url) if method == 'GET' else self.do_head(url)
+            resp = self.client.request(method, url, preload_content=False)
+            resp._body = resp.read(decode_content=False)  # type: ignore
+            resp.release_conn()
+            return resp
+        except urllib3.exceptions.NameResolutionError as e:
+            self.logger.error(e)
+            return 400
         except urllib3.exceptions.MaxRetryError as e:
-            self.logger.exception(e)
-            await self.refuse(send, 502)  # Bad Gateway
+            self.logger.error(e)
+            return 502  # Bad Gateway
         except urllib3.exceptions.TimeoutError as e:
-            self.logger.exception(e)
-            await self.refuse(send, 504)  # Gateway Timeout
-        # TODO: 域名不对
-
-    def do_get(self, url: str):
-        return self.client.request('GET', url, preload_content=False)
-
-    def do_head(self, url: str):
-        return self.client.request('HEAD', url)
-
-    def cook_response(self, urllib3_resp: urllib3.response.BaseHTTPResponse):
-        data = urllib3_resp.read(decode_content=False)
-
-        # if self.enable_gzip and not urllib3_resp.headers.get('Content-Encoding') and (ct := urllib3_resp.headers.get('Content-Type')) and (
-        #         ct.startswith('text') or ct.startswith('application/json') or ct.startswith('image/svg+xml')):
-        #     data = gzip.compress(data)
-        #     urllib3_resp.headers['Content-Encoding'] = 'gzip'
-        #     urllib3_resp.headers['Content-Length'] = str(len(data))
-
-        # urllib3 HTTPHeaderDict doesn't support |
-        headers = list((dict(urllib3_resp.headers) | self.ex_resp_headers).items())
-
-        return Response(urllib3_resp.status, headers, data)
+            self.logger.error(e)
+            return 504  # Gateway Timeout
 
     @staticmethod
     def check_host(h: str):
         '''阻止构造函数含有协议'''
         if h.startswith('http:') or h.startswith('https:') or '/' in h:
             raise ValueError(f'{h} is incorrect.')
-
-    def check_size(self, url: str):
-        '''启用max_size时用HEAD获得目标文件大小，与max_size比较'''
-        if not self.maxsize:
-            return True
-        resp = self.client.request('HEAD', url)
-        cl = resp.headers.get('Content-Length')
-        if cl is None:
-            return False
-        return int(cl) < self.maxsize
 
     def check_domain(self, domain: str):
         '''请求的域名是否在白名单中，只会在Mode2下调用'''

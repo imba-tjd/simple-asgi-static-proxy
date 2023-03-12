@@ -42,11 +42,7 @@ Client: `curl 127.0.0.1:8000/example.com/index.html`.
 ### Options
 
 * Response HTTP Headers: By default it returns upstream headers combined with ex_resp_headers. You can override `ex_resp_headers`
-* Disk cache: `cacher = dict-like-obj`
+* Disk cache: `cacher = shelve.open('cache')`
 * Subdomain(mode2): `subdomain = True`
 * Size limit: `maxsize = n bytes`. Defaults to 8MB. *0* indicates no limit. Upstream must response with Content-Length in order to use this
 * UA: `ua = 'xxx' or ''`
-
-## TODO
-
-* 日志
