@@ -1,36 +1,52 @@
 # Simple ASGI Static Proxy
 
-* A simple proxy for **static** resources
+* A proxy designed for **static** resources
 * No security protection
+* The client
+  * Can only use GET
+  * Query string and request headers are ignored
+* The server
+  * Upstream must support HTTPS
+  * Return whatever upstream returns
+* For browser: Use forward-proxy tools like `Header Editor`
 
 ## Usage
 
-### Server
-
-* Install: `pip install git+https://github.com/imba-tjd/simple-asgi-static-proxy`
-* Mode1: Pass a single domain str to the constructor. Path will append to the domain and send
-* Mode2: Pass domains set as allow lists or `set()` to the constructor. The first part of the path will be treated as domain. Subdomain is not supported yet
-* Disk cache: Pass a dict-like-obj to `cacher` parameter
+Install: `pip install git+https://github.com/imba-tjd/simple-asgi-static-proxy`
 
 ```py
 from simple_asgi_static_proxy import SimpleASGIStaticProxy as App
-app = App('github.githubassets.com')
-app2 = App({'github.githubassets.com', 'raw.githubusercontent.com'})
+app = App('mode1' --or-- {'mode2'}, kw_opts)
 
 if __name__ == '__main__':
     import uvicorn
     uvicorn.run('main:app')
 ```
 
-### Client
+### Mode1
 
-* In Browser, use forward-proxy tools such as `Header Editor`
-* Must and only support gzip
-* Can only use GET
-* Query string and request headers are ignored
-* Upstream must support https and response with Content-Length
+Works like a normal reverse proxy.
+
+Server: `app = App('example.com')`.
+
+Client: `curl 127.0.0.1:8000/index.html`.
+
+### Mode2
+
+The first part of path is considered domain.
+
+Server: `app = App({'example.com', 'example.org', 'whitelist_domain'})`. Use `set{}` to allow any domain.
+
+Client: `curl 127.0.0.1:8000/example.com/index.html`.
+
+### Options
+
+* Response HTTP Headers: By default it returns upstream headers combined with ex_resp_headers. You can override `ex_resp_headers`
+* Disk cache: `cacher = dict-like-obj`
+* Subdomain(mode2): `subdomain = True`
+* Size limit: `maxsize = n bytes`. Defaults to 8MB. *0* indicates no limit. Upstream must response with Content-Length in order to use this
+* UA: `ua = 'xxx' or ''`
 
 ## TODO
 
-* HEAD
 * 日志
