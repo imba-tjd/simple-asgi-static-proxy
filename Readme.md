@@ -7,7 +7,7 @@
   * Query string and request headers are ignored
 * The server
   * Upstream must support HTTPS
-  * Return whatever upstream returns
+  * Return whatever upstream returns, plus strong cache header
 * For browser: Use forward-proxy tools like `Header Editor`
 
 ## Usage
@@ -46,3 +46,7 @@ Client: `curl 127.0.0.1:8000/example.com/index.html`.
 * Subdomain(mode2): `subdomain = True`
 * Size limit: `maxsize = n bytes`. Defaults to 8MB. *0* indicates no limit. Upstream must response with Content-Length in order to use this
 * UA: `ua = 'xxx' or ''`
+
+### TODO
+
+* 304
