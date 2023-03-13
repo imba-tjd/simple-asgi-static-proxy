@@ -38,7 +38,9 @@ class SimpleASGIStaticProxy:
 
     async def __call__(self, scope, receive, send: SEND):
         assert scope['type'] == 'http'
-        assert scope['method'] in ('GET', 'HEAD')
+        if scope['method'] not in ('GET', 'HEAD'):
+            await self.refuse(send)
+            return
         path: str = scope['path']
 
         url = self.cook_url(path)
