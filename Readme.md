@@ -49,4 +49,7 @@ Client: `curl 127.0.0.1:8000/example.com/index.html`.
 
 ### TODO
 
-* 304
+* 304：检查If-Modified-Since和If-None-Match，如果存在这两个头，直接返回304
+* X-Forwarded-For：增加自己
+* 限制总的访问频率
+* 用DELETE删除缓存
