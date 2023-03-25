@@ -4,6 +4,8 @@ from typing import NamedTuple, Any, MutableMapping, Literal, Callable, Coroutine
 
 SEND = Callable[[dict[str, Any]], Coroutine]  # ASGI send callable
 
+__all__ = ['SimpleASGIStaticProxy']
+
 
 class Response(NamedTuple):
     '''Used for caching'''
@@ -36,9 +38,11 @@ class SimpleASGIStaticProxy:
         if ua != 'DEFAULT':
             self.ex_resp_headers['User-Agent'] = ua
 
+        self.logger.info('proxy for %s', host)
+
     async def __call__(self, scope, receive, send: SEND):
         assert scope['type'] == 'http'
-        if scope['method'] not in ('GET', 'HEAD'):
+        if scope['method'] not in ('GET', 'HEAD', 'DELETE'):
             await self.refuse(send)
             return
         path: str = scope['path']
@@ -48,10 +52,10 @@ class SimpleASGIStaticProxy:
             await self.refuse(send)
             return
 
-        if scope['method'] == 'GET':
-            await self.serve_get(url, send)
-        else:
-            await self.serve_head(url, send)
+        await {'GET': self.serve_get,
+               'HEAD': self.serve_head,
+               'DELETE': self.serve_delete
+               }[scope['method']](url, send)
 
     async def serve_head(self, url: str, send: SEND):
         upstream_resp = await self.do_request('HEAD', url)
@@ -90,6 +94,13 @@ class SimpleASGIStaticProxy:
         self.cacher.setdefault(url, resp)
 
         await self.response(send, resp)
+
+    async def serve_delete(self, url: str, send: SEND):
+        if url in self.cacher:
+            del self.cacher[url]
+            await self.refuse(send, 204)
+        else:
+            await self.refuse(send, 400)
 
     @staticmethod
     async def refuse(send: SEND, status=403):
