@@ -2,9 +2,10 @@ import urllib3
 import logging
 from typing import NamedTuple, Any, MutableMapping, Literal, Callable, Coroutine
 
+SCOPE = dict[str, Any]
 SEND = Callable[[dict[str, Any]], Coroutine]  # ASGI send callable
 
-__all__ = ['SimpleASGIStaticProxy']
+__all__ = ['SimpleASGIStaticProxy', 'Option']
 
 
 class Response(NamedTuple):
@@ -14,13 +15,38 @@ class Response(NamedTuple):
     data: bytes
 
 
-class SimpleASGIStaticProxy:
-    ex_resp_headers = {  # 默认的额外响应头
+class Option(NamedTuple):
+    ex_resp_headers: dict[str, str] = {
         'Cache-Control': 'public, max-age=31536000, immutable',
         'Accept-Ranges': 'none'
     }
+    cacher: MutableMapping[str, Any] = {}
+    maxsize: int = 2**23
+    subdomain: bool = True
+    method: list[str] = ['GET', 'HEAD']
 
-    def __init__(self, host: str | set[str], *, ex_resp_headers: dict[str, str] = {}, cacher: MutableMapping[str, Any] = {}, maxsize=2**23, subdomain=True, ua: str = 'DEFAULT'):
+
+class RefuseError(Exception):
+    '''Used for return empty body with status code'''
+    @property
+    def status(self) -> int:
+        if self.args:
+            assert len(self.args) == 1 and isinstance(self.args[0], int)
+            return self.args[0]
+        else:
+            return 404
+
+
+class ResponseError(Exception):
+    '''Used for return Response, not actually Error'''
+    @property
+    def response(self) -> Response:
+        assert isinstance(self.args[0], Response)
+        return self.args[0]
+
+
+class SimpleASGIStaticProxy:
+    def __init__(self, host: str | set[str], op: Option):
         if type(host) is str:
             self.check_host(host)
         else:  # Mode2
@@ -28,79 +54,67 @@ class SimpleASGIStaticProxy:
                 self.check_host(h)
 
         self.host = host
-        self.cacher = cacher
-        self.maxsize = maxsize
-        self.allow_subdomain = subdomain
-        self.client = urllib3.PoolManager(headers={'Accept-Encoding': 'gzip'}, timeout=3, retries=1)
+        self.op = op
+        self.client = urllib3.PoolManager(headers={'Accept-Encoding': 'br, gzip'}, timeout=3, retries=1)
         self.logger = logging.getLogger('uvicorn.error' if 'uvicorn' in __import__('sys').modules else __name__)
-        if ex_resp_headers:
-            self.ex_resp_headers = ex_resp_headers
-        if ua != 'DEFAULT':
-            self.ex_resp_headers['User-Agent'] = ua
 
-        self.logger.info('proxy for %s', host)
+        self.logger.info('proxy for %s', host or 'any')
 
-    async def __call__(self, scope, receive, send: SEND):
+    async def __call__(self, scope: SCOPE, receive, send: SEND):
         assert scope['type'] == 'http'
-        if scope['method'] not in ('GET', 'HEAD', 'DELETE'):
-            await self.refuse(send)
-            return
+        try:
+            await self.serve(scope)
+        except RefuseError as e:
+            await self.refuse(send, e.status)
+        except ResponseError as e:
+            await self.response(send, e.response)
+
+    async def serve(self, scope):
+        if scope['method'] not in self.op.method:
+            raise RefuseError
         path: str = scope['path']
 
         url = self.cook_url(path)
-        if url is None:
-            await self.refuse(send)
-            return
 
         await {'GET': self.serve_get,
                'HEAD': self.serve_head,
                'DELETE': self.serve_delete
-               }[scope['method']](url, send)
+               }[scope['method']](url, scope)
 
-    async def serve_head(self, url: str, send: SEND):
+    async def serve_head(self, url: str, scope):
         upstream_resp = await self.do_request('HEAD', url)
-        if isinstance(upstream_resp, int):
-            await self.refuse(send, upstream_resp)
-            return
+        raise ResponseError(Response(upstream_resp.status, list(upstream_resp.headers.items()), b''))
 
-        resp = Response(upstream_resp.status, list(upstream_resp.headers.items()), b'')
+    async def serve_get(self, url: str, scope: SCOPE):
+        if resp := self.op.cacher.get(url):  # 已缓存
+            raise ResponseError(resp)
 
-        await self.response(send, resp)
+        req_headers: dict[bytes, bytes] = dict(scope['headers'])
+        if b'If-Modified-Since' in req_headers or b'If-None-Match' in req_headers:
+            raise RefuseError(304)  # Not Modified
 
-    async def serve_get(self, url: str, send: SEND):
-        if resp := self.cacher.get(url):  # 已缓存
-            await self.response(send, resp)
-            return
-
-        if self.maxsize:  # 需检查大小
+        if self.op.maxsize:  # 需检查大小
             head_resp = await self.do_request('HEAD', url)
-            if isinstance(head_resp, int):
-                await self.refuse(send, head_resp)
-                return
 
             cl = head_resp.headers.get('Content-Length')
-            if cl is None or int(cl) > self.maxsize:
-                await self.refuse(send)
-                return
+            if cl is None or int(cl) > self.op.maxsize:
+                raise RefuseError
 
         upstream_resp = await self.do_request('GET', url)  # 作为客户端发请求
-        if isinstance(upstream_resp, int):
-            await self.refuse(send, upstream_resp)
-            return
 
-        headers_dic = dict(upstream_resp.headers) | self.ex_resp_headers
+        headers_dic = dict(upstream_resp.headers) | self.op.ex_resp_headers
         resp = Response(upstream_resp.status, list(headers_dic.items()), upstream_resp.data)
 
-        self.cacher.setdefault(url, resp)
+        self.op.cacher.setdefault(url, resp)  # 添加缓存
 
-        await self.response(send, resp)
+        raise ResponseError(resp)
 
-    async def serve_delete(self, url: str, send: SEND):
-        if url in self.cacher:
-            del self.cacher[url]
-            await self.refuse(send, 204)
+    async def serve_delete(self, url: str, scope):
+        if url in self.op.cacher:
+            del self.op.cacher[url]
+            raise RefuseError(204)
         else:
-            await self.refuse(send, 400)
+            raise RefuseError(400)
 
     @staticmethod
     async def refuse(send: SEND, status=403):
@@ -132,11 +146,11 @@ class SimpleASGIStaticProxy:
         else:  # Mode2
             path = path.removeprefix('https://').removeprefix('http://')
             if path[-1] == '/' or path.endswith('/favicon.ico'):
-                return  # 禁止访问根
+                raise RefuseError  # 禁止访问根
 
             domain = path[1:path.find('/', 1)]  # 即使返回-1也没问题
             if not self.check_domain(domain):
-                return  # 不在白名单
+                raise RefuseError  # 不在白名单
 
             return 'https://' + path[1:]
 
@@ -149,13 +163,13 @@ class SimpleASGIStaticProxy:
             return resp
         except urllib3.exceptions.NameResolutionError as e:
             self.logger.error(e)
-            return 400
+            raise RefuseError(400)
         except urllib3.exceptions.MaxRetryError as e:
             self.logger.error(e)
-            return 502  # Bad Gateway
+            raise RefuseError(502)  # Bad Gateway
         except urllib3.exceptions.TimeoutError as e:
             self.logger.error(e)
-            return 504  # Gateway Timeout
+            raise RefuseError(504)  # Gateway Timeout
 
     @staticmethod
     def check_host(h: str):
@@ -168,9 +182,8 @@ class SimpleASGIStaticProxy:
         if not self.host or domain in self.host:
             return True  # host为空时直接放行
 
-        if self.allow_subdomain:  # domain不在host里且启用subdomain，检查host里的不是domain的后缀
+        if self.op.subdomain:  # domain不在host里且启用subdomain，检查host里的不是domain的后缀
             for h in self.host:
                 if domain.endswith(h):
                     return True
-
         return False
