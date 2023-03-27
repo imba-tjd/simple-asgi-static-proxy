@@ -5,6 +5,7 @@
 * Support GET(Strong cache), HEAD(no cache), DELETE(remove cache)
 * The client
   * Query string and request headers are ignored
+  * Must support gzip
 * The server
   * Upstream must support HTTPS
 * For browser: Use forward-proxy tools like `Header Editor`
@@ -15,7 +16,8 @@ Install: `pip install git+https://github.com/imba-tjd/simple-asgi-static-proxy`
 
 ```py
 from simple_asgi_static_proxy import SimpleASGIStaticProxy as App
-app = App('mode1' --or-- {'mode2'}, opts)
+from simple_asgi_static_proxy import Option
+app = App('mode1' --or-- {'mode2'}, Option())
 
 if __name__ == '__main__':
     import uvicorn
@@ -42,9 +44,8 @@ The first part of path is parsed as domain.
 * Disk cache: `cacher = shelve.open('cache')`
 * Allow subdomain in mode2: `subdomain = True`
 * Size limit: `maxsize = n (bytes)`. Defaults to 8MB. *0* indicates no limit. Upstream must response with Content-Length in order to use this
+* Throttle: max requests count per 2 seconds
 
 ### TODO
 
 * X-Forwarded-For：增加前一跳
-* 限制总的访问频率
-* 压缩未压缩内容

@@ -1,5 +1,7 @@
 import urllib3
 import logging
+import asyncio
+import gzip
 from typing import NamedTuple, Any, MutableMapping, Literal, Callable, Coroutine
 
 SCOPE = dict[str, Any]
@@ -24,6 +26,7 @@ class Option(NamedTuple):
     maxsize: int = 2**23
     subdomain: bool = True
     method: list[str] = ['GET', 'HEAD']
+    throttle: int = 100
 
 
 class RefuseError(Exception):
@@ -57,6 +60,8 @@ class SimpleASGIStaticProxy:
         self.op = op
         self.client = urllib3.PoolManager(headers={'Accept-Encoding': 'br, gzip'}, timeout=3, retries=1)
         self.logger = logging.getLogger('uvicorn.error' if 'uvicorn' in __import__('sys').modules else __name__)
+        self.throttle = op.throttle
+        asyncio.create_task(self.throttle_restore())
 
         self.logger.info('proxy for %s', host or 'any')
 
@@ -72,9 +77,12 @@ class SimpleASGIStaticProxy:
     async def serve(self, scope):
         if scope['method'] not in self.op.method:
             raise RefuseError
-        path: str = scope['path']
 
-        url = self.cook_url(path)
+        if self.throttle <= 0:
+            raise RefuseError(429)
+        self.throttle -= 1
+
+        url = self.cook_url(scope['path'])
 
         await {'GET': self.serve_get,
                'HEAD': self.serve_head,
@@ -82,7 +90,7 @@ class SimpleASGIStaticProxy:
                }[scope['method']](url, scope)
 
     async def serve_head(self, url: str, scope):
-        upstream_resp = await self.do_request('HEAD', url)
+        upstream_resp = self.do_request('HEAD', url)
         raise ResponseError(Response(upstream_resp.status, list(upstream_resp.headers.items()), b''))
 
     async def serve_get(self, url: str, scope: SCOPE):
@@ -94,13 +102,15 @@ class SimpleASGIStaticProxy:
             raise RefuseError(304)  # Not Modified
 
         if self.op.maxsize:  # 需检查大小
-            head_resp = await self.do_request('HEAD', url)
+            head_resp = self.do_request('HEAD', url)
 
             cl = head_resp.headers.get('Content-Length')
             if cl is None or int(cl) > self.op.maxsize:
                 raise RefuseError
 
-        upstream_resp = await self.do_request('GET', url)  # 作为客户端发请求
+        upstream_resp = self.do_request('GET', url)  # 作为客户端发请求
+
+        self.compress_resp_ondemand(upstream_resp)
 
         headers_dic = dict(upstream_resp.headers) | self.op.ex_resp_headers
         resp = Response(upstream_resp.status, list(headers_dic.items()), upstream_resp.data)
@@ -154,7 +164,7 @@ class SimpleASGIStaticProxy:
 
             return 'https://' + path[1:]
 
-    async def do_request(self, method: Literal['GET'] | Literal['HEAD'], url: str):
+    def do_request(self, method: Literal['GET'] | Literal['HEAD'], url: str):
         '''作为客户端请求，处理了已知异常'''
         try:
             resp = self.client.request(method, url, preload_content=False)
@@ -187,3 +197,18 @@ class SimpleASGIStaticProxy:
                 if domain.endswith(h):
                     return True
         return False
+
+    async def throttle_restore(self):
+        while True:
+            self.throttle = self.op.throttle
+            await asyncio.sleep(2)
+
+    @staticmethod
+    def compress_resp_ondemand(resp: urllib3.response.BaseHTTPResponse):
+        '''原地修改resp，压缩大于200KB的文本'''
+        if resp.status == 200 and resp.headers.get('Content-Encoding') is None and len(resp.data) > 1024*200:
+            ct = resp.headers.get('Content-Type', '')
+            if ct.startswith('text/') or ct.endswith('json') or ct.endswith('xml'):
+                resp._body = gzip.compress(resp.data)  # type: ignore
+                resp.headers['Content-Encoding'] = 'gzip'
+                resp.headers['Content-Length'] = str(len(resp.data))
