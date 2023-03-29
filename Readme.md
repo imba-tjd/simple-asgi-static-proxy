@@ -49,3 +49,4 @@ The first part of path is parsed as domain.
 ### TODO
 
 * X-Forwarded-For：增加前一跳
+* 测试304能否被浏览器接受

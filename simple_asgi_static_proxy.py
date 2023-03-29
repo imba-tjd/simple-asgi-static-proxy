@@ -20,7 +20,8 @@ class Response(NamedTuple):
 class Option(NamedTuple):
     ex_resp_headers: dict[str, str] = {
         'Cache-Control': 'public, max-age=31536000, immutable',
-        'Accept-Ranges': 'none'
+        'Accept-Ranges': 'none',
+        'X-Robots-Tag': 'none',
     }
     cacher: MutableMapping[str, Any] = {}
     maxsize: int = 2**23
@@ -205,10 +206,10 @@ class SimpleASGIStaticProxy:
 
     @staticmethod
     def compress_resp_ondemand(resp: urllib3.response.BaseHTTPResponse):
-        '''原地修改resp，压缩大于200KB的文本'''
-        if resp.status == 200 and resp.headers.get('Content-Encoding') is None and len(resp.data) > 1024*200:
+        '''原地修改resp，压缩大于100KB的文本'''
+        if resp.status == 200 and resp.headers.get('Content-Encoding') is None and len(resp.data) > 1024*100:
             ct = resp.headers.get('Content-Type', '')
-            if ct.startswith('text/') or ct.endswith('json') or ct.endswith('xml'):
+            if ct.startswith('text/') or ct.endswith('javascript') or ct.endswith('json') or ct.endswith('xml'):
                 resp._body = gzip.compress(resp.data)  # type: ignore
                 resp.headers['Content-Encoding'] = 'gzip'
                 resp.headers['Content-Length'] = str(len(resp.data))
